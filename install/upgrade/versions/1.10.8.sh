@@ -121,3 +121,35 @@ for restic_conf in "$HESTIA"/data/users/*/restic.conf; do
 done
 unset restic_conf
 # END #5965
+
+# Fix per-domain SMTP relay lookup for authenticated null-sender mail on existing Exim installations
+exim_conf="/etc/exim4/exim4.conf.template"
+exim_conf_bak="${exim_conf}.before_smtp_relay_null_sender.bak"
+pattern_dsearch='SMTP_RELAY_FILE = ${if exists{/etc/exim4/domains/${lookup{$sender_address_domain}dsearch{/etc/exim4/domains}}/smtp_relay.conf}{/etc/exim4/domains/${lookup{$sender_address_domain}dsearch{/etc/exim4/domains}}/smtp_relay.conf}{/etc/exim4/smtp_relay.conf}}'
+pattern_legacy='SMTP_RELAY_FILE = ${if exists{/etc/exim4/domains/${sender_address_domain}/smtp_relay.conf}{/etc/exim4/domains/$sender_address_domain/smtp_relay.conf}{/etc/exim4/smtp_relay.conf}}'
+
+if [[ -f "$exim_conf" ]] && { grep -qF "$pattern_dsearch" "$exim_conf" || grep -qF "$pattern_legacy" "$exim_conf"; }; then
+	echo "[ + ] Fixing per-domain SMTP relay lookup for null-sender mail in Exim"
+	sed -i.before_smtp_relay_null_sender.bak \
+		-e 's#SMTP_RELAY_FILE = ${if exists{/etc/exim4/domains/${lookup{$sender_address_domain}dsearch{/etc/exim4/domains}}/smtp_relay.conf}{/etc/exim4/domains/${lookup{$sender_address_domain}dsearch{/etc/exim4/domains}}/smtp_relay.conf}{/etc/exim4/smtp_relay.conf}}#SMTP_RELAY_FILE = ${if exists{/etc/exim4/domains/${lookup{${if def:sender_address_domain{$sender_address_domain}{${extract{2}{@}{$authenticated_id}}}}}dsearch{/etc/exim4/domains}}/smtp_relay.conf}{/etc/exim4/domains/${lookup{${if def:sender_address_domain{$sender_address_domain}{${extract{2}{@}{$authenticated_id}}}}}dsearch{/etc/exim4/domains}}/smtp_relay.conf}{/etc/exim4/smtp_relay.conf}}#' \
+		-e 's#SMTP_RELAY_FILE = ${if exists{/etc/exim4/domains/${sender_address_domain}/smtp_relay.conf}{/etc/exim4/domains/$sender_address_domain/smtp_relay.conf}{/etc/exim4/smtp_relay.conf}}#SMTP_RELAY_FILE = ${if exists{/etc/exim4/domains/${if def:sender_address_domain{$sender_address_domain}{${extract{2}{@}{$authenticated_id}}}}/smtp_relay.conf}{/etc/exim4/domains/${if def:sender_address_domain{$sender_address_domain}{${extract{2}{@}{$authenticated_id}}}}/smtp_relay.conf}{/etc/exim4/smtp_relay.conf}}#' \
+		"$exim_conf"
+
+	if systemctl restart exim4; then
+		echo "[ + ] Exim4 restarted successfully"
+	else
+		echo "[ ! ] Exim4 failed to restart, rolling back configuration"
+
+		if [[ -f "$exim_conf_bak" ]]; then
+			mv "$exim_conf_bak" "$exim_conf"
+
+			if systemctl restart exim4; then
+				echo "[ + ] Exim4 restarted successfully after rollback"
+			else
+				echo "[ ! ] Exim4 failed to restart even after rollback"
+			fi
+		else
+			echo "[ ! ] Backup file not found, unable to rollback"
+		fi
+	fi
+fi
