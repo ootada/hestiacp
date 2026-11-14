@@ -74,7 +74,10 @@ fi
 
 # create backup of the user.conf an database
 $BIN/v-backup-user-config $user
-check_result $? "Unable to stage the configuration of $user for backup" "$E_BACKUP"
+if [ $? -ne 0 ]; then
+	echo "Unable to stage the configuration of $user for backup" | $SENDMAIL -s "$subj" "$email" "yes"
+	check_result "$E_BACKUP" "Unable to stage the configuration of $user for backup"
+fi
 export GOMAXPROCS=2
 export RESTIC_READ_CONCURRENCY=2
 ionice -c2 -n7 nice -n 19 restic --repo "${REPO%/}/$user" --limit-upload 10240 --read-concurrency 2 --password-file $USER_DATA/restic.conf backup /home/$user
