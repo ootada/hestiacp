@@ -23,6 +23,7 @@ upgrade_config_set_value 'UPGRADE_UPDATE_FILEMANAGER_CONFIG' 'false'
 upgrade_config_set_value 'UPGRADE_UPDATE_MAIL_TEMPLATES' 'false'
 upgrade_config_set_value 'UPGRADE_REBUILD_USERS' 'false'
 
+# BEGIN #5977: dovecot-hestia Fail2Ban filter
 # Fix dovecot-iptables jail never banning any IP: the stock fail2ban dovecot
 # filter does not match the log format produced by Hestia's Dovecot config
 # (new "Login aborted" messages, auth(user,ip,sasl:...) lines from Exim's
@@ -48,7 +49,17 @@ if [[ -f "$f2b_jail" ]] && [[ -f "$hestia_f2b_filter" ]] \
 
 	backup_jail="$(mktemp)"
 
-	if ! cp -p "$f2b_jail" "$backup_jail"; then
+	# Keep an existing (possibly customised) filter under a unique name
+	filter_backup_ok=true
+	if [[ -f "$f2b_filter" ]]; then
+		if backup_filter="$(mktemp "$f2b_filter.bak-XXXXXX")" && cp -p "$f2b_filter" "$backup_filter"; then
+			echo "[ + ] Previous dovecot-hestia filter saved as $backup_filter"
+		else
+			filter_backup_ok=false
+		fi
+	fi
+
+	if ! cp -p "$f2b_jail" "$backup_jail" || ! $filter_backup_ok; then
 		echo "[ ! ] Failed to create temporary backup"
 		rm -f "$backup_jail"
 	elif ! cp -f "$hestia_f2b_filter" "$f2b_filter"; then
@@ -95,3 +106,4 @@ if [[ -f "$f2b_jail" ]] && [[ -f "$hestia_f2b_filter" ]] \
 		fi
 	fi
 fi
+# END #5977
