@@ -51,8 +51,18 @@ tmpdir="/home/$user/backup"
 # We delete the backup dir first make sure all old database has been cleared
 rm -fr "$tmpdir"
 umask 077
-install -d -m 0700 -o root -g root "$tmpdir"
-(enter_user_dir "$user" "backup" root) || exit $?
+# mkdir fails if the path exists, so a symlink planted after the rm is never followed
+mkdir -m 0700 -- "$tmpdir" 2> /dev/null
+check_result $? "Unable to create $tmpdir"
+# The owner of /home/$user can still rename "backup" while we work. Verify the
+# directory, hold it open and write through /proc/$$/fd/9 from here on.
+enter_user_dir "$user" "backup" root
+exec 9< .
+# Someone could have swapped in their own directory between mkdir and the check
+if [ -n "$(ls -A .)" ]; then
+	check_result "$E_FORBIDEN" "$tmpdir is not empty"
+fi
+tmpdir="/proc/$$/fd/9"
 
 # Backup sys configs
 echo "-- SYSTEM --" | tee $BACKUP/$user.log

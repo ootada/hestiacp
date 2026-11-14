@@ -107,3 +107,17 @@ if [[ -f "$f2b_jail" ]] && [[ -f "$hestia_f2b_filter" ]] \
 	fi
 fi
 # END #5977
+
+# BEGIN #5965: restrict permissions of the Restic configuration files
+# Earlier versions created them with the default umask (world readable).
+if [[ -f "$HESTIA/conf/restic.conf" ]] && [[ ! -L "$HESTIA/conf/restic.conf" ]]; then
+	chmod 660 -- "$HESTIA/conf/restic.conf"
+fi
+# Per user repository password files
+for restic_conf in "$HESTIA"/data/users/*/restic.conf; do
+	if [[ -f "$restic_conf" ]] && [[ ! -L "$restic_conf" ]]; then
+		chmod 600 -- "$restic_conf"
+	fi
+done
+unset restic_conf
+# END #5965
