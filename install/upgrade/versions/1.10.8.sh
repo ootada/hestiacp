@@ -198,3 +198,24 @@ if [[ -f "$exim_conf" ]] && grep -q '^SMTP_RELAY_FILE = ' "$exim_conf" \
 	fi
 fi
 # END #5913
+
+# BEGIN #5526: phpMyAdmin SSO file must use get_real_user_ip()
+# Redeploy the SSO script, v-delete-sys-pma-sso / v-add-sys-pma-sso generate a new
+# API key and phpMyAdmin key and rewrite hestia-sso.php and hestia-sso.inc.php
+# (640 root:hestiamail) consistently.
+pma_sso_file="/usr/share/phpmyadmin/hestia-sso.php"
+if [[ -n "$PHPMYADMIN_KEY" ]] && [[ -f "$pma_sso_file" ]] && ! grep -q 'get_real_user_ip' "$pma_sso_file"; then
+	echo "[ * ] Updating hestia-sso for phpMyAdmin..."
+	# v-delete-sys-pma-sso looks for the key in single quotes, the file uses double
+	# quotes, so it leaves the old access key behind: revoke it here
+	pma_old_key_id="$(grep -Po 'API_KEY",\s*"\K[^":]+' "$pma_sso_file")"
+	if "$BIN/v-delete-sys-pma-sso" quiet && "$BIN/v-add-sys-pma-sso" quiet; then
+		if [[ -n "$pma_old_key_id" ]] && [[ -f "$HESTIA/data/access-keys/$pma_old_key_id" ]]; then
+			"$BIN/v-delete-access-key" "$pma_old_key_id"
+		fi
+		echo "[ + ] phpMyAdmin SSO updated"
+	else
+		echo "[ ! ] Failed to update phpMyAdmin SSO, run v-delete-sys-pma-sso and v-add-sys-pma-sso manually"
+	fi
+fi
+# END #5526
