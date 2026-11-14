@@ -129,12 +129,17 @@ exim_relay_new_expr='${if eq{$sender_address_domain}{}{${extract{2}{@}{$authenti
 exim_relay_old_dsearch='SMTP_RELAY_FILE = ${if exists{/etc/exim4/domains/${lookup{$sender_address_domain}dsearch{/etc/exim4/domains}}/smtp_relay.conf}{/etc/exim4/domains/${lookup{$sender_address_domain}dsearch{/etc/exim4/domains}}/smtp_relay.conf}{/etc/exim4/smtp_relay.conf}}'
 exim_relay_old_legacy='SMTP_RELAY_FILE = ${if exists{/etc/exim4/domains/${sender_address_domain}/smtp_relay.conf}{/etc/exim4/domains/$sender_address_domain/smtp_relay.conf}{/etc/exim4/smtp_relay.conf}}'
 
+# Expression from the original PR, def: is not valid for a variable: "failed to expand" at runtime
+exim_relay_broken_expr='${if def:sender_address_domain{$sender_address_domain}{${extract{2}{@}{$authenticated_id}}}}'
+
+# Skip when the line already has the fixed expression
 if [[ -f "$exim_conf" ]] && grep -q '^SMTP_RELAY_FILE = ' "$exim_conf" \
-	&& ! grep -q '^SMTP_RELAY_FILE = .*authenticated_id' "$exim_conf"; then
+	&& ! grep '^SMTP_RELAY_FILE = ' "$exim_conf" | grep -qF "$exim_relay_new_expr"; then
 
 	exim_content="$(< "$exim_conf")"
 	exim_new_content="${exim_content//"$exim_relay_old_dsearch"/SMTP_RELAY_FILE = \${if exists\{/etc/exim4/domains/\${lookup\{$exim_relay_new_expr\}dsearch\{/etc/exim4/domains\}\}/smtp_relay.conf\}\{/etc/exim4/domains/\${lookup\{$exim_relay_new_expr\}dsearch\{/etc/exim4/domains\}\}/smtp_relay.conf\}\{/etc/exim4/smtp_relay.conf\}\}}"
 	exim_new_content="${exim_new_content//"$exim_relay_old_legacy"/SMTP_RELAY_FILE = \${if exists\{/etc/exim4/domains/$exim_relay_new_expr/smtp_relay.conf\}\{/etc/exim4/domains/$exim_relay_new_expr/smtp_relay.conf\}\{/etc/exim4/smtp_relay.conf\}\}}"
+	exim_new_content="${exim_new_content//"$exim_relay_broken_expr"/"$exim_relay_new_expr"}"
 
 	if [[ "$exim_new_content" == "$exim_content" ]]; then
 		echo "[ ! ] Exim SMTP_RELAY_FILE line was customised, not updating it. See https://github.com/hestiacp/hestiacp/pull/5913 for the new line"
@@ -157,8 +162,11 @@ if [[ -f "$exim_conf" ]] && grep -q '^SMTP_RELAY_FILE = ' "$exim_conf" \
 
 			# Exim reads the config generated from the template, check that one
 			exim_check_file="$(mktemp)"
+			# -bV only parses the file, a routing test of a remote address also expands the SMTP_RELAY_FILE
+			# expression (unrouteable or DNS errors are fine, only an expansion failure is not)
 			if update-exim4.conf -o "$exim_check_file" > /dev/null 2>&1 \
-				&& exim4 -C "$exim_check_file" -bV > /dev/null 2>&1; then
+				&& exim4 -C "$exim_check_file" -bV > /dev/null 2>&1 \
+				&& ! exim4 -C "$exim_check_file" -bt hestia-check@example.invalid 2>&1 | grep -q 'failed to expand'; then
 				exim_ok=true
 			else
 				exim_ok=false
