@@ -27,6 +27,58 @@ v-change-sys-port 2083
 
 You can also disable Cloudflare proxy feature.
 
+## Can I run the control panel behind a reverse proxy?
+
+Yes. By default PHP sees the address of the proxy as the client IP. To make the panel use the real client IP, tell the panel's Nginx (`hestia-nginx`) which proxies to trust. Create a file in `/etc/hestiacp/nginx.d/` (the directory is not created by Hestia, and files in it survive updates):
+
+```bash
+mkdir -p /etc/hestiacp/nginx.d
+```
+
+```nginx
+# /etc/hestiacp/nginx.d/realip.conf
+set_real_ip_from  192.0.2.10;
+set_real_ip_from  2001:db8::10;
+real_ip_header    X-Forwarded-For;
+real_ip_recursive on;
+```
+
+Check the configuration and restart the panel (this also restarts `hestia-php`):
+
+```bash
+/usr/local/hestia/nginx/sbin/hestia-nginx -t && systemctl restart hestia
+```
+
+Notes:
+
+- Enabling this logs out existing panel sessions once, because the session is bound to the client IP and that changes from the proxy address to the real client address. Users just log in again. phpMyAdmin single sign-on compares the client IP seen by the panel with the one seen by phpMyAdmin, which is served by the system web server, not by `hestia-nginx`. If phpMyAdmin is reached through a proxy, that web server must resolve the real client IP too, or SSO links are rejected. Only Cloudflare connecting from its published addresses is handled automatically (through `CF-Connecting-IP`); a Cloudflare Tunnel running on the server is not.
+- Only list the exact addresses of your own proxies in `set_real_ip_from`. Never trust a wide range or `0.0.0.0/0`, or any visitor can spoof their IP. Both IPv4 and IPv6 addresses are supported; add one `set_real_ip_from` line for each proxy address. Use a header that your proxy always overwrites (or removes and sets again). With `X-Forwarded-For` keep `real_ip_recursive on`; with a single-value header such as `X-Real-IP` you can use `real_ip_header X-Real-IP;`.
+- This requires `hestia-nginx` from a Hestia release that includes `ngx_http_realip_module`. Older `hestia-nginx` builds ignore the file (their `nginx.conf` has no include), so `-t` passes but nothing changes. Check with `hestia-nginx -V 2>&1 | grep -o http_realip_module` and `grep nginx.d /usr/local/hestia/nginx/conf/nginx.conf`.
+
+::: warning
+If you trust `127.0.0.1`, `::1` or the server's own IP (a proxy on the same host, or Cloudflare Tunnel with `cloudflared` running on the server), every local process, including hosted users' PHP scripts and cron jobs, can connect to port 8083 and send any client IP. That can get arbitrary IPs banned by Fail2Ban and can satisfy `LOGIN_ALLOW_IPS` and `API_ALLOWED_IP`. Prefer a proxy on a separate host or address, or restrict who can connect to port 8083 (for example with an iptables `owner` match that only lets the `cloudflared` user connect to it).
+
+Unless the proxy is Cloudflare, it must also remove the `CF-Connecting-IP` header from incoming requests, because the panel honors it for clients that appear to come from Cloudflare addresses.
+:::
+
+::: warning
+Fail2Ban and the firewall cannot protect the panel behind a proxy, because the connections to port 8083 are made by the proxy. Failed logins are logged with the real client IP, so the `hestia-iptables` jail bans that IP, but this has no effect on connections coming from the proxy. Block abusive clients on the proxy itself (for example with an allow list, a rate limit or CrowdSec).
+
+Without a working real IP setup (for example if the proxy does not send the header), failed logins are logged with the proxy address, and after 5 of them the jail bans the proxy and locks everybody out of the panel. As a safeguard, add the proxy to `ignoreip` for the Hestia jail only, in `/etc/fail2ban/jail.d/hestia-proxy.local`:
+
+```ini
+[hestia-iptables]
+ignoreip = 127.0.0.1/8 ::1 192.0.2.10 2001:db8::10
+```
+
+Then reload Fail2Ban:
+
+```bash
+fail2ban-client reload
+```
+
+:::
+
 ## How to remove unused ethernet ports from RRD?
 
 ```bash
@@ -62,6 +114,22 @@ v-delete-web-domain-allow-users user domain.tld
 ## Can I restrict access to the `admin` account?
 
 In Hestia 1.3, we have made it possible to give another user Administrator access. In 1.4, we have given system administrators the option to limit access to the main **System Administrator** account to improve security.
+
+## Does the `admin` account have sudo access?
+
+No. Hestia removes the sudo and polkit administrator rights from the `admin` account. Ubuntu's default `/etc/sudoers` contains `%admin ALL=(ALL) ALL` and its polkit configuration (`49-ubuntu-admin.rules`) accepts members of the `admin` group as administrators, which would give a user named `admin` full root access through its primary group of the same name (`sudo`, `pkexec`). To prevent this, Hestia installs:
+
+- `/etc/sudoers.d/zz-hestia-deny-admin` (`admin ALL=(ALL:ALL) !ALL`). sudo uses the last matching entry and the file is named so that it is read after the `%admin` rule. This also overrides a leftover `/etc/sudoers.d/admin` on old servers.
+- On Ubuntu, `/etc/polkit-1/rules.d/49-hestia-admin-identities.rules`, which offers only members of the `sudo` group as administrators. It is named so that it is read before Ubuntu's `49-ubuntu-admin.rules` but after custom `40`-`48` rules. It is installed on Ubuntu (also on 22.04, where polkit ignores it until a release upgrade), not on Debian. Other members of the `admin` group are no longer offered as polkit administrators either; add them to `sudo`.
+
+The files are installed before the `admin` user is created, by `v-add-user` and `v-rebuild-user`/`v-restore-user`, and by the upgrade to 1.10.8 on existing servers. They are removed again by `v-delete-user admin` (only possible when `admin` is not the main administrator account, `ROOT_USER`). Because of the `zz-` ordering, a drop-in of your own that sorts later in `/etc/sudoers.d` can still override the sudoers entry. That is your choice as the server administrator.
+
+If you need root access in a shell, create a separate account and add it to the `sudo` group instead of re-enabling it for `admin`:
+
+```bash
+adduser myadmin
+usermod -aG sudo myadmin
+```
 
 ## My server IP has changed, what do I need to do?
 

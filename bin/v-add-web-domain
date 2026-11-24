@@ -38,6 +38,10 @@ source $HESTIA/func/syshealth.sh
 # load config file
 source_conf "$HESTIA/conf/hestia.conf"
 
+# user_exec keeps the working directory; tools like find fail when it is
+# inaccessible to the user (e.g. /root), so run from / (#5988)
+cd /
+
 # Additional argument formatting
 format_domain
 format_domain_idn

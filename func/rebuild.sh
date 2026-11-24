@@ -62,6 +62,7 @@ rebuild_user_conf() {
 	if [ -z "${RATE_LIMIT+x}" ]; then
 		sed -i "/MAIL_ACCOUNTS/a RATE_LIMIT='200'" $USER_DATA/user.conf
 	fi
+	update_exim_user_limit "$user"
 	# Run template trigger
 	if [ -x "$HESTIA/data/packages/$PACKAGE.sh" ]; then
 		$HESTIA/data/packages/$PACKAGE.sh "$user" "$CONTACT" "$NAME"
@@ -69,6 +70,11 @@ rebuild_user_conf() {
 
 	# Rebuild user
 	shell=$(grep -w "$SHELL" /etc/shells | head -n1)
+	if [ "$user" = "admin" ] && ! id "$user" &> /dev/null; then
+		# Ubuntu's %admin sudoers and polkit rules would give "admin" root access (#5919)
+		protect_admin_user
+		check_result $? "unable to remove sudo and polkit administrator rights from the '$user' user" "$E_INVALID"
+	fi
 	id "$user" &> /dev/null || /usr/sbin/useradd "$user" -s "$shell" -c "$CONTACT" \
 		-m -d "$HOMEDIR/$user" > /dev/null 2>&1
 
